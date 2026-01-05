@@ -23,7 +23,6 @@ MEDIA_EXTENSIONS = {'.mp4', '.mkv', '.ts', '.iso', '.rmvb', '.avi', '.mov',
                     '.mpeg', '.mpg', '.wmv', '.3gp', '.asf', '.m4v', '.flv', 
                     '.m2ts', '.tp', '.f4v'}
 
-# 常见的元数据/刮削文件后缀
 META_EXTENSIONS = {'.nfo', '.jpg', '.png', '.xml', '.bif', '.json'}
 
 # 莫兰迪色系 (用于UI渲染)
@@ -32,6 +31,9 @@ MORANDI_BLUE = "#AED6F1"
 MORANDI_GREEN = "#A9DFBF"  
 MORANDI_GREY = "#D7DBDD"   
 MORANDI_PURPLE = "#D2B4DE" 
+
+# 日志前缀
+LOG_PREFIX = "[StrmDeLocal]"
 
 class StrmFileHandler(FileSystemEventHandler):
     def __init__(self, queue: Queue):
@@ -48,7 +50,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "探测STRM入库，自动关联并清理本地源文件、种子及刮削数据"
     plugin_icon = ""
-    plugin_version = "1.1.2"
+    plugin_version = "1.1.4"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -67,8 +69,27 @@ class StrmDeLocal(_PluginBase):
         if isinstance(value, str): return value.lower() == 'true'
         return bool(value)
 
+    def _log(self, msg: str, level: str = "info", title: str = None):
+        """统一日志格式: 【标题】 内容"""
+        prefix = f"【{title}】" if title else "【StrmDeLocal】"
+        full_msg = f"{prefix} {msg}"
+        if level == "info": logger.info(full_msg)
+        elif level == "warning": logger.warning(full_msg)
+        elif level == "error": logger.error(full_msg)
+        elif level == "debug": logger.debug(full_msg)
+
+    def _count_strm_files(self, path: Path) -> int:
+        """统计目录下 .strm 文件数量"""
+        count = 0
+        try:
+            for f in path.rglob("*.strm"):
+                if f.is_file(): count += 1
+        except: pass
+        return count
+
     def init_plugin(self, config: dict = None):
-        logger.info("插件初始化中 (V1.1.2)...")
+        self._log("--------------------")
+        self._log("插件初始化中 (V1.1.4)...")
         if not config: config = self.get_config() or {}
         self._enabled = self._to_bool(config.get("enabled", False))
         mappings = config.get("path_mappings") or ""
@@ -91,21 +112,20 @@ class StrmDeLocal(_PluginBase):
             mode = "仅通知" if self._notify_only else "执行清理"
             notify = "开启" if self._send_notify else "关闭"
             deep = "开启" if self._deep_search else "关闭"
-            info = f"当前配置: 模式={mode} | 通知={notify} | 冷却={self._notify_interval}s | 映射={len(self._path_mappings)}条 | 深度查找={deep}"
-            logger.info(info)
+            self._log(f"当前配置: 模式={mode} | 通知={notify} | 冷却={self._notify_interval}s | 深度查找={deep}")
             
-            # --- V1.1.1 修复: 增加路径检查日志 ---
+            # 路径检查
             for mapping in self._path_mappings:
                  if ":" in mapping:
                      strm_path = mapping.split(":")[0].strip()
                      if not Path(strm_path).exists():
-                         logger.warning(f"配置警告: 监控路径不存在 -> {strm_path}")
+                         self._log(f"配置警告: 监控路径不存在 -> {strm_path}", "warning")
             
             self.stop_service()
             self.start_service()
         else:
             self.stop_service()
-            logger.info("[StrmDeLocal] 插件未启用")
+            self._log("插件未启用")
 
     def start_service(self):
         self._stop_event.clear()
@@ -116,11 +136,14 @@ class StrmDeLocal(_PluginBase):
         for mapping in self._path_mappings:
             if ":" not in mapping: continue
             strm_root = mapping.split(":", 1)[0].strip()
-            if Path(strm_root).exists():
+            strm_path = Path(strm_root)
+            if strm_path.exists():
                 try:
                     self._observer.schedule(StrmFileHandler(self._queue), path=strm_root, recursive=True)
                     active_count += 1
-                    logger.info(f"成功挂载监控源: {strm_root}")
+                    # V1.1.3: 统计现有 strm 文件数
+                    strm_count = self._count_strm_files(strm_path)
+                    self._log(f"成功挂载监控源: {strm_root} (已存在 {strm_count} 个 .strm 文件)")
                 except: pass
         if active_count > 0: self._observer.start()
 
@@ -227,11 +250,6 @@ class StrmDeLocal(_PluginBase):
         self.post_message(mtype=NotificationType.SiteMessage, title=title, text=text)
 
     def get_page(self) -> List[dict]:
-        """
-        V1.1.2 页面重构
-        1. 移除顶部监控面板 (响应用户反馈)
-        2. 保留优化后的历史记录列表 (莫兰迪配色 + 分类统计)
-        """
         historys = self.get_data('history') or []
         history_cards = []
         
@@ -241,7 +259,6 @@ class StrmDeLocal(_PluginBase):
             time_str = h.get('time', '')
             raw_files = h.get('files', [])
             
-            # 统计标签
             tags = []
             file_details = []
             
@@ -249,7 +266,7 @@ class StrmDeLocal(_PluginBase):
                 v, n, i, o = 0, 0, 0, 0
                 for f in raw_files:
                     f_low = f.lower()
-                    file_details.append(f) # 保留全路径或文件名
+                    file_details.append(f)
                     if f_low.endswith(('.mp4', '.mkv', '.ts', '.iso')): v+=1
                     elif f_low.endswith(('.nfo', '.xml')): n+=1
                     elif f_low.endswith(('.jpg', '.png', '.bif')): i+=1
@@ -260,27 +277,19 @@ class StrmDeLocal(_PluginBase):
                 if i: tags.append({'text': f'图片 {i}', 'color': MORANDI_BLUE})
                 if o: tags.append({'text': f'其他 {o}', 'color': MORANDI_PURPLE})
             elif h.get('target'):
-                # 兼容旧数据
                 file_details.append(str(h.get('target')))
                 tags.append({'text': '旧版记录', 'color': MORANDI_GREY})
 
-            # 动作颜色
             action_color = MORANDI_GREEN if "发现" in action else MORANDI_BLUE
             if "清理" in action: action_color = MORANDI_RED
-
-            # 构建内容
-            # 第一行: 标题 + 动作 + 时间
-            # 第二行: 分类标签
-            # 第三行: 文件列表 (带背景色容器)
             
             detail_lines = []
-            for f in file_details[:10]: # 限制显示数量
+            for f in file_details[:10]:
                 detail_lines.append({'component': 'div', 'class': 'text-caption text-grey-darken-1', 'text': f"• {Path(f).name}"})
             if len(file_details) > 10:
                 detail_lines.append({'component': 'div', 'class': 'text-caption text-grey', 'text': f"... 等共 {len(file_details)} 个文件"})
 
             card_content = [
-                # Header
                 {'component': 'div', 'class': 'd-flex align-center justify-space-between', 'content': [
                      {'component': 'div', 'class': 'd-flex align-center', 'content': [
                          {'component': 'VChip', 'props': {'size': 'small', 'color': action_color, 'variant': 'flat', 'class': 'mr-2'}, 'text': action},
@@ -288,12 +297,10 @@ class StrmDeLocal(_PluginBase):
                      ]},
                      {'component': 'span', 'class': 'text-caption text-grey', 'text': time_str}
                 ]},
-                # Tags
                 {'component': 'div', 'class': 'd-flex flex-wrap gap-1 mt-2 mb-2', 'content': [
                     {'component': 'VChip', 'props': {'size': 'x-small', 'color': t['color'], 'variant': 'tonal', 'class': 'mr-1'}, 'text': t['text']}
                     for t in tags
                 ]},
-                # Details Box
                 {'component': 'div', 'class': 'pa-2 rounded bg-grey-lighten-4', 'content': detail_lines}
             ]
             
@@ -323,25 +330,24 @@ class StrmDeLocal(_PluginBase):
                     stats = {"scanned": 0, "matched": 0, "deleted": 0, "failed": 0, "deleted_files": []}
                     has_data = False
             except: 
-                logger.error(f"队列处理异常: {traceback.format_exc()}")
+                self._log(f"队列处理异常: {traceback.format_exc()}", "error")
                 has_data = False
 
-    def _find_by_transfer_history(self, strm_path: Path, local_base: Path) -> Tuple[bool, List[Path], Optional[str]]:
+    def _find_by_transfer_history(self, strm_path: Path, local_base: Path, title: str = None) -> Tuple[bool, List[Path], Optional[str]]:
         path_str = str(strm_path).replace("\\\\", "/")
         
-        # --- V1.1.1 修复: 增强 TMDB 提取逻辑 ({tmdbid=...}) ---
+        # 提取 TMDB ID
         tmdb_id = None
-        # 匹配 {tmdbid=123}, {tmdb=123}, {tmdb-123}
         tmdb_match = re.search(r'\{(?:tmdb|tmdbid)[=-]?(\d+)\}', path_str, re.I)
         if not tmdb_match:
             tmdb_match = re.search(r'tmdb[=-](\d+)', path_str, re.I)
         if not tmdb_match:
-            # 兼容旧格式
             tmdb_match = re.search(r'\[tmdbid[=-](\d+)\]', path_str, re.I)
         
         if tmdb_match:
             tmdb_id = int(tmdb_match.group(1))
         
+        # 提取季集信息 (用于查询，但不在日志中显示)
         season_num, episode_num = None, None
         se_match = re.search(r'[sS](\d+)[eE](\d+)', strm_path.stem)
         if se_match:
@@ -349,24 +355,31 @@ class StrmDeLocal(_PluginBase):
             episode_num = f"E{se_match.group(2).zfill(2)}"
         
         if not tmdb_id:
-            logger.info(f"未能从路径提取 TMDB ID: {strm_path.name}")
+            self._log(f"-> 提取失败: 未能识别 TMDB ID", title=title)
             return False, [], None
         
-        msg = f"TMDB:{tmdb_id}"
-        if season_num: msg += f" {season_num}"
-        if episode_num: msg += f"{episode_num}"
-        logger.info(f"提取成功: {msg}")
+        # 日志只显示 TMDB ID，不显示季集
+        self._log(f"-> 提取成功: TMDB:{tmdb_id}", title=title)
         
+        # 用于返回的消息
+        msg = f"TMDB:{tmdb_id}"
+        
+        # 查询转移记录
         transfer_records = []
         try:
             if season_num and episode_num:
                 transfer_records = self._transferhistory.get_by(tmdbid=tmdb_id, season=season_num, episode=episode_num) or []
             else:
                 transfer_records = self._transferhistory.get_by(tmdbid=tmdb_id) or []
-        except: return False, [], msg
+        except Exception as e:
+            self._log(f"-> 查询转移记录失败: {e}", "warning", title=title)
+            return False, [], msg
         
         if not transfer_records:
+            self._log(f"-> 查询结果: 未找到匹配的转移记录", title=title)
             return False, [], msg
+        
+        self._log(f"-> 查询结果: 找到 {len(transfer_records)} 条转移记录", title=title)
         
         matched_files = []
         local_base_str = str(local_base).replace("\\\\", "/")
@@ -376,9 +389,14 @@ class StrmDeLocal(_PluginBase):
                 p = Path(dest_path)
                 if not self._is_excluded(p): matched_files.append(p)
         
+        if matched_files:
+            self._log(f"-> 本地文件匹配: {len(matched_files)} 个文件在配置的本地路径下", title=title)
+        else:
+            self._log(f"-> 本地文件匹配: 无 (转移记录目标路径不在配置的本地路径范围内)", title=title)
+        
         return bool(matched_files), matched_files, msg
 
-    def _recursive_check_and_cleanup(self, dir_path: Path, stats: dict = None):
+    def _recursive_check_and_cleanup(self, dir_path: Path, stats: dict = None, title: str = None):
         if not dir_path.exists() or not dir_path.is_dir():
             return
         
@@ -395,38 +413,35 @@ class StrmDeLocal(_PluginBase):
         except: return
 
         if has_valid_content:
-            logger.debug(f"目录保留(含内容): {dir_path.name}")
             return
 
         if self._notify_only:
-            logger.info(f"[仅通知] 可回收空目录(含杂项): {dir_path}")
+            self._log(f"-> 发现可回收目录: {dir_path}", title=title)
             return
 
         try:
             shutil.rmtree(dir_path)
-            logger.info(f"已回收目录: {dir_path}")
+            self._log(f"-> 已回收空目录: {dir_path}", title=title)
             if stats: stats["deleted"] += 1
             if dir_path.parent.exists():
-                self._recursive_check_and_cleanup(dir_path.parent, stats)
+                self._recursive_check_and_cleanup(dir_path.parent, stats, title=title)
         except Exception as e:
-            logger.warning(f"目录删除失败: {e}")
+            self._log(f"-> 目录回收失败: {e}", "warning", title=title)
 
     def _del_meta_for_file(self, media_path: Path):
-        """清理刮削文件：支持模糊匹配和更多格式"""
         if not self._clean_metadata: return
         parent = media_path.parent
         if not parent.exists(): return
         
         stem = media_path.stem
+        deleted_count = 0
         
-        # 1. 严格后缀匹配
         for ext in META_EXTENSIONS:
             f = parent / f"{stem}{ext}"
             try: 
-                if f.exists(): f.unlink(); logger.info(f"Del Meta: {f.name}")
+                if f.exists(): f.unlink(); deleted_count += 1
             except: pass
             
-        # 2. 前缀模糊匹配
         try:
             for f in parent.glob(f"{stem}*"):
                 if f == media_path: continue
@@ -436,20 +451,32 @@ class StrmDeLocal(_PluginBase):
                     pass
                 elif name.startswith(f"{stem} ") or name.startswith(f"{stem}.") or \
                      name.startswith(f"{stem}-") or name.startswith(f"{stem}_"):
-                    try: f.unlink(); logger.info(f"Del Fuzzy Meta: {f.name}");
+                    try: f.unlink(); deleted_count += 1
                     except: pass
         except: pass
+        
+        if deleted_count > 0:
+            self._log(f"-> 已清理刮削文件: {deleted_count} 个", title=self._current_title if hasattr(self, '_current_title') else None)
 
     def _handle_single_file(self, strm_path: Path, stats: dict = None):
-        # --- V1.1.1 修复: 增加处理开始日志 ---
-        logger.info(f"开始处理任务: {strm_path.name}")
+        # 提取标题用于日志
+        title = strm_path.stem
+        
+        # 开始分隔线
+        self._log("--------------------", title=title)
+        self._log(f"监测到 strm 入库: {strm_path}", title=title)
         
         path_str = str(strm_path).replace("\\\\", "/")
         if stats is not None: stats["scanned"] += 1
         
+        # 检查排除规则
         hit_rule = self._check_exclusion(strm_path)
-        if hit_rule: return
+        if hit_rule:
+            self._log(f"-> 命中排除规则: [{hit_rule}]，跳过处理", title=title)
+            self._log(f"结果: 已跳过 (排除规则)", title=title)
+            return
         
+        # 查找路径映射
         local_base, source_root = None, None
         for mapping in self._path_mappings:
             if ":" not in mapping: continue
@@ -461,104 +488,118 @@ class StrmDeLocal(_PluginBase):
                 break
         
         if not local_base: 
-            # --- V1.1.1 修复: 映射失败警告 ---
-            logger.warning(f"未找到匹配的路径映射: {strm_path}")
+            self._log(f"-> 路径映射失败: 未找到匹配的映射规则", "warning", title=title)
+            self._log(f"结果: 已跳过 (无匹配映射)", title=title)
             return
+        
+        self._log(f"-> 路径映射成功: {source_root} => {local_base}", title=title)
 
         rel_path = path_str[len(source_root):].strip("/")
         parts = rel_path.split("/")
         processed_files = set()
         
-        found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base)
+        # 通过转移记录查找
+        found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base, title=title)
         
         if found_by_history and history_files:
-            logger.info(f"精确匹配: {len(history_files)} 文件 (含缺失)")
+            self._log(f"-> 精确匹配成功: {len(history_files)} 个本地文件", title=title)
             if stats: stats["matched"] += len(history_files)
             
             for file_path in history_files:
-                self._perform_cleanup(file_path, stats, processed_files)
-                self._recursive_check_and_cleanup(file_path.parent, stats)
-        
-        if self._deep_search:
-            self._do_deep_search(strm_path, local_base, parts, processed_files, stats)
-        
-        # 统一保存历史 (如果有匹配)
-        if found_by_history or (self._deep_search and stats['matched'] > 0):
-             action_name = "清理完成" if not self._notify_only else "发现文件"
-             # 提取本次操作涉及的所有文件
-             files_record = list(set(processed_files)) # 去重
-             # 如果是仅通知模式，且文件存在，添加到记录
-             if self._notify_only and history_files:
-                 files_record = [str(f) for f in history_files]
-             
-             self._save_history(h_msg or strm_path.stem, action_name, 
-                              f"涉及 {len(files_record)} 个文件", files_list=files_record)
+                self._perform_cleanup(file_path, stats, processed_files, title=title)
+                self._recursive_check_and_cleanup(file_path.parent, stats, title=title)
+            
+            # 结果汇总
+            action = "清理完成" if not self._notify_only else "发现待清理"
+            self._log(f"结果: {action}，处理 {len(history_files)} 个文件", title=title)
+            
+            # 保存历史
+            files_record = list(set(processed_files))
+            if self._notify_only and history_files:
+                files_record = [str(f) for f in history_files]
+            self._save_history(h_msg or strm_path.stem, action, 
+                             f"涉及 {len(files_record)} 个文件", files_list=files_record)
+        else:
+            # 尝试深度查找
+            if self._deep_search:
+                self._log(f"-> 精确匹配失败，启用深度查找...", title=title)
+                self._do_deep_search(strm_path, local_base, parts, processed_files, stats, title=title)
+                
+                if processed_files:
+                    action = "清理完成" if not self._notify_only else "发现待清理"
+                    self._log(f"结果: {action}，深度查找处理 {len(processed_files)} 个文件", title=title)
+                    self._save_history(h_msg or strm_path.stem, action, 
+                                     f"涉及 {len(processed_files)} 个文件 (深度查找)", files_list=list(processed_files))
+                else:
+                    self._log(f"结果: 未找到对应本地媒体资源，已跳过", title=title)
+            else:
+                self._log(f"结果: 未找到对应本地媒体资源，已跳过", title=title)
 
     def _get_torrent_hash(self, file_path: Path, h_record=None) -> Optional[str]:
-        """获取种子Hash: 优先记录，其次反查"""
         try:
-            # 1. 优先使用记录中保存的hash
             if h_record and h_record.download_hash:
                 return h_record.download_hash
             
-            # 2. 尝试使用 src 路径反查 (针对硬链接场景)
             if h_record and h_record.src:
                 h = self._downloadhistory.get_hash_by_fullpath(h_record.src)
                 if h: return h
 
-            # 3. 尝试使用当前文件路径反查 (针对直接下载场景)
             return self._downloadhistory.get_hash_by_fullpath(str(file_path))
         except:
             return None
 
-    def _perform_cleanup(self, file_path: Path, stats: dict, processed_files: set):
-        """执行全套清理动作: 刮削文件 -> 记录 -> 种子 -> 物理文件"""
+    def _perform_cleanup(self, file_path: Path, stats: dict, processed_files: set, title: str = None):
         if str(file_path) in processed_files: return
         
+        file_exists = file_path.exists()
+        
         if not self._notify_only:
-            # 1. 尝试获取转移记录 (用于获取hash/src)
             h_record = None
             try: h_record = self._transferhistory.get_by_dest(str(file_path))
             except: pass
 
-            # 2. 清理刮削文件
-            try: self._del_meta_for_file(file_path)
-            except: pass
+            # 清理刮削文件
+            if self._clean_metadata:
+                self._current_title = title  # 传递title给_del_meta_for_file
+                try: self._del_meta_for_file(file_path)
+                except: pass
 
-            # 3. 清理种子 (V4.6: 使用Hash触发事件)
+            # 清理种子
             if self._delete_torrent:
                 t_hash = self._get_torrent_hash(file_path, h_record)
                 if t_hash:
-                    try: eventmanager.send_event(EventType.DownloadFileDeleted, {"hash": t_hash})
+                    try: 
+                        eventmanager.send_event(EventType.DownloadFileDeleted, {"hash": t_hash})
+                        self._log(f"-> 已触发删种: {t_hash[:8]}...", title=title)
                     except: pass
-                else:
-                    logger.debug(f"未找到种子HASH，跳过删种: {file_path}")
 
-            # 4. 清理转移记录
+            # 清理转移记录
             if self._remove_record and h_record:
-                try: self._transferhistory.delete(h_record.id)
+                try: 
+                    self._transferhistory.delete(h_record.id)
+                    self._log(f"-> 已删除转移记录: ID={h_record.id}", title=title)
                 except: pass
 
-            # 5. 物理删除主文件
-            if file_path.exists():
+            # 物理删除主文件
+            if file_exists:
                 try:
                     file_path.unlink()
-                    logger.info(f"已删除: {file_path.name}")
+                    self._log(f"-> 已删除文件: {file_path}", title=title)
                     if stats: 
                         stats["deleted"] += 1
                         stats["deleted_files"].append(str(file_path))
                 except Exception as e:
-                    logger.warning(f"删除失败 {file_path}: {e}")
+                    self._log(f"-> 文件删除失败: {file_path} ({e})", "warning", title=title)
                     if stats: stats["failed"] += 1
             else:
-                logger.info(f"主文件已缺失，仅清理关联项: {file_path.name}")
+                self._log(f"-> 文件已缺失，仅清理关联项: {file_path}", title=title)
         else:
-            status = "拟删除" if file_path.exists() else "拟清理关联项"
-            logger.info(f"[仅通知] {status}: {file_path}")
+            status = "拟删除" if file_exists else "拟清理关联项"
+            self._log(f"-> [仅通知] {status}: {file_path}", title=title)
 
         processed_files.add(str(file_path))
 
-    def _do_deep_search(self, strm_path: Path, local_base: Path, parts: List[str], processed_files: set, stats: dict):
+    def _do_deep_search(self, strm_path: Path, local_base: Path, parts: List[str], processed_files: set, stats: dict, title: str = None):
         current = local_base
         for part in parts[:-1]:
             target = current / part
@@ -570,22 +611,35 @@ class StrmDeLocal(_PluginBase):
                     sub_dirs = [x for x in current.iterdir() if x.is_dir()]
                 except: return
                 
-                name_year = re.search(r'(.+?)[\\(\\[（](\\d{4})[\\)\\]）]', part)
+                # 显示候选列表
+                if sub_dirs:
+                    dir_names = [d.name for d in sub_dirs[:20]]
+                    self._log(f"-> 本地目录名称不匹配: [{part}]，正在尝试智能重定向...", title=title)
+                    if len(dir_names) <= 10:
+                        self._log(f"-> 候选目录: {dir_names}", title=title)
+                
+                name_year = re.search(r'(.+?)[\(\[（](\d{4})[\)\]）]', part)
                 if name_year:
                     n, y = name_year.group(1).strip().lower(), name_year.group(2)
                     for d in sub_dirs:
                         if n in d.name.lower() and y in d.name:
-                            current = d; found = True; break
-                if not found and re.search(r'[sS]eason\\s*\\d+', part, re.I):
-                    num = int(re.search(r'\\d+', part).group())
+                            current = d; found = True
+                            self._log(f"-> 智能重定向成功: {d.name}", title=title)
+                            break
+                if not found and re.search(r'[sS]eason\s*\d+', part, re.I):
+                    num = int(re.search(r'\d+', part).group())
                     for d in sub_dirs:
-                        m = re.search(r'[sS]eason\\s*(\\d+)', d.name, re.I)
+                        m = re.search(r'[sS]eason\s*(\d+)', d.name, re.I)
                         if m and int(m.group(1)) == num:
-                            current = d; found = True; break
-                if not found: return 
+                            current = d; found = True
+                            self._log(f"-> 季目录匹配成功: {d.name}", title=title)
+                            break
+                if not found:
+                    self._log(f"-> 本地媒体定位失败: 未找到目录 [{part}]", title=title)
+                    return 
 
         strm_stem = strm_path.stem
-        tv = re.search(r'(.+)[sS](\\d+)[eE](\\d+)', strm_stem)
+        tv = re.search(r'(.+)[sS](\d+)[eE](\d+)', strm_stem)
         if tv:
             se = f"S{tv.group(2).zfill(2)}E{tv.group(3).zfill(2)}"
             if current.exists():
@@ -603,18 +657,17 @@ class StrmDeLocal(_PluginBase):
     def _do_cleanup_dir(self, target_dir: Path, title: str, stats: dict = None):
         if self._is_excluded(target_dir): return
         if self._notify_only:
-             # DIR cleanup is mostly for deep search, history saving handled inside
              self._save_history(title, "发现可清理", str(target_dir))
              return
         try:
             if self._remove_record: self._del_records(target_dir)
             if self._delete_torrent: self._del_torrents(target_dir)
             shutil.rmtree(target_dir)
+            self._log(f"-> 已删除目录: {target_dir.name}")
             if stats: 
                 stats["deleted"] += 1
                 stats["deleted_files"].append(str(target_dir))
             
-            # Directory cleanup history
             self._save_history(title, "清理完成", f"目录: {target_dir.name}", files_list=[str(target_dir)])
         except: pass
     
@@ -627,7 +680,6 @@ class StrmDeLocal(_PluginBase):
     def _del_torrents(self, d: Path):
         for root, _, fs in os.walk(d):
             for f in fs:
-                # V4.6: 使用Hash清理 (目录级清理逻辑)
                 file_path = Path(root) / f
                 h_record = None
                 try: h_record = self._transferhistory.get_by_dest(str(file_path))
@@ -648,9 +700,6 @@ class StrmDeLocal(_PluginBase):
         return bool(self._check_exclusion(p))
 
     def _save_history(self, title: str, action: str, target: str, files_list: List[str] = None):
-        """
-        保存历史记录 (支持新的 files 字段)
-        """
         history = self.get_data('history') or []
         new_item = {
             "time": time.strftime("%Y-%m-%d %H:%M:%S"), 
