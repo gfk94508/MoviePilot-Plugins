@@ -51,7 +51,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.2.0"
+    plugin_version = "1.2.1"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -334,6 +334,16 @@ class StrmDeLocal(_PluginBase):
                     'text': f"文件：{file_stats}"
                 })
             
+            # V1.2.1: 详细文件列表 (紧跟文件统计)
+            if files:
+                for f in files:
+                     sub_contents.append({
+                         'component': 'div', 
+                         'class': 'text-caption text-grey-darken-1 px-2 mt-1', 
+                         'style': 'word-break: break-all;', 
+                         'text': f"• {f}"
+                     })
+            
             # 5. 操作和时间 (底部两端对齐)
             sub_contents.append({
                 'component': 'div',
@@ -381,20 +391,6 @@ class StrmDeLocal(_PluginBase):
             }
             
             card_content = [main_row]
-            
-            # V1.2.0: 底部显示详细文件列表
-            if files:
-                file_lines = []
-                for f in files:
-                     file_lines.append({'component': 'div', 'class': 'text-caption text-grey-darken-1', 'style': 'word-break: break-all;', 'text': f"• {f}"})
-                
-                card_content.append({'component': 'VDivider', 'class': 'my-2'})
-                card_content.append({
-                    'component': 'div',
-                    'class': 'bg-grey-lighten-4 rounded pa-2',
-                    'content': file_lines
-                })
-            
             cards.append({'component': 'VCard', 'class': 'mb-3 pa-2', 'content': card_content})
             
         return cards
