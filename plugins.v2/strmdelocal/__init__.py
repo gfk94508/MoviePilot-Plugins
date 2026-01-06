@@ -10,6 +10,7 @@ from app.helper.module import ModuleHelper
 from app.db.transferhistory_oper import TransferHistoryOper
 from app.db.downloadhistory_oper import DownloadHistoryOper
 import os
+import stat
 import traceback
 import time
 import threading
@@ -264,6 +265,14 @@ class StrmDeLocal(_PluginBase):
     def get_tmdbimage_url(path: str, prefix="w500"):
         if not path: return ""
         return f"https://{settings.TMDB_IMAGE_DOMAIN}/t/p/{prefix}{path}"
+
+    @staticmethod
+    def _on_rm_error(func, path, exc_info):
+        """rmtree 错误回调，尝试处理只读文件"""
+        try:
+             os.chmod(path, stat.S_IWRITE)
+             func(path)
+        except: pass
 
     @staticmethod
     def is_media_file(filename: str) -> bool:
@@ -576,7 +585,7 @@ class StrmDeLocal(_PluginBase):
             return
 
         try:
-            shutil.rmtree(dir_path)
+            shutil.rmtree(dir_path, onerror=self._on_rm_error)
             self._log(f"-> 已回收空目录: {dir_path}", title=title)
             if stats: stats["deleted"] += 1
             if dir_path.parent.exists():
@@ -891,7 +900,7 @@ class StrmDeLocal(_PluginBase):
             try:
                 if self._remove_record: self._del_records(target_dir)
                 if self._delete_torrent: self._del_torrents(target_dir)
-                shutil.rmtree(target_dir)
+                shutil.rmtree(target_dir, onerror=self._on_rm_error)
                 self._log(f"-> 已删除目录: {target_dir.name}", title=title)
                 if stats: 
                     stats["deleted"] += 1
