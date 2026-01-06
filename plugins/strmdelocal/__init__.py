@@ -630,7 +630,7 @@ class StrmDeLocal(_PluginBase):
         # 1. 基础信息提取
         title = strm_path.stem
         path_str = str(strm_path).replace("\\\\", "/")
-        self._log(f"监测到 strm 入库: {strm_path}", title=title)
+        self._log(f"监测到 strm 入库: {strm_path}", title=None)
         if stats is not None: stats["scanned"] += 1
 
         # 2. 提取 TMDB ID 和 季/集 (用于元数据)
@@ -871,8 +871,8 @@ class StrmDeLocal(_PluginBase):
                     if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS and se.lower() in f.name.lower():
                         if str(f) not in processed_files and not self._is_excluded(f):
                             if stats: stats["matched"] += 1
-                            self._perform_cleanup(f, stats, processed_files)
-                self._recursive_check_and_cleanup(current, stats)
+                            self._perform_cleanup(f, stats, processed_files, title=title)
+                self._recursive_check_and_cleanup(current, stats, title=title)
         else:
             if current != local_base and str(current) not in processed_files:
                 if stats: stats["matched"] += 1
