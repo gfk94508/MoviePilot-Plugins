@@ -51,7 +51,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.2.3"
+    plugin_version = "1.2.4"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -318,6 +318,10 @@ class StrmDeLocal(_PluginBase):
             if deep:
                 match_texts.append(f"深度查找: {deep}")
             
+            # V1.2.4: 操作状态合并到此处 (显示为 "清理完成 N")
+            file_count = len(files)
+            match_texts.append(f"{action} {file_count}")
+
             if match_texts:
                 sub_contents.append({
                     'component': 'VCardText',
@@ -346,12 +350,11 @@ class StrmDeLocal(_PluginBase):
                          'text': f"- {f}"
                      })
             
-            # 5. 操作和时间 (底部两端对齐)
+            # 5. 时间 (底部右对齐)
             sub_contents.append({
                 'component': 'div',
-                'props': {'class': 'd-flex justify-space-between align-center mt-2 px-2'},
+                'props': {'class': 'd-flex justify-end align-center mt-2 px-2'},
                 'content': [
-                     {'component': 'span', 'class': 'text-caption', 'text': f"操作：{action}"},
                      {'component': 'span', 'class': 'text-caption text-grey', 'text': time_str}
                 ]
             })
