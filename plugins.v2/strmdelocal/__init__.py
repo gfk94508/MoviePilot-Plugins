@@ -53,7 +53,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.6"
+    plugin_version = "1.3.7"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -106,7 +106,6 @@ class StrmDeLocal(_PluginBase):
         self._delete_torrent = self._to_bool(config.get("delete_torrent", False))
         self._remove_record = self._to_bool(config.get("remove_record", False))
         self._deep_search = self._to_bool(config.get("deep_search", False))
-        self._directory_depth = int(config.get("directory_depth") or 0) # 目录回收保留层级
         self._keep_dirs = config.get("keep_dirs") or []
         if isinstance(self._keep_dirs, str):
             self._keep_dirs = [x.strip() for x in self._keep_dirs.replace('\n', '|').split('|') if x.strip()]
@@ -202,11 +201,8 @@ class StrmDeLocal(_PluginBase):
                 ]}
             ]},
             {'component': 'VRow', 'content': [
-                {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
+                {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [
                     {'component': 'VSwitch', 'props': {'model': 'deep_search', 'label': '启用深度查找', 'hint': '当精确匹配失败时，尝试在本地目录中模糊搜索'}},
-                ]},
-                {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                    {'component': 'VTextField', 'props': {'model': 'directory_depth', 'label': '目录回收保留层级', 'type': 'number', 'placeholder': '0', 'hint': '0=回收至根目录(默认)，1=保留一级子目录(如分类文件夹)，2=保留二级...'}},
                 ]},
             ]},
             {'component': 'VRow', 'content': [
@@ -585,17 +581,7 @@ class StrmDeLocal(_PluginBase):
                 # 1. 绝对边界检查
                 if dir_path == root_path: return
                 
-                # 2. 深度保留检查
-                # 计算相对路径深度 (root=/a, dir=/a/b -> rel=b, parts=1)
-                # str(rel) == '.' 表示当前就是 root
-                rel = dir_path.relative_to(root_path)
-                depth = len(rel.parts) if str(rel) != '.' else 0
-                
-                # 如果当前深度 <= 保留层级，停止删除
-                if depth <= self._directory_depth:
-                     return
-
-                # 3. 上级目录检查 (兼容性逻辑，保留作为双重保险)
+                # 2. 上级目录检查 (确保不越过 root_path)
                 if str(root_path).replace("\\\\", "/").startswith(str(dir_path).replace("\\\\", "/")):
                      return
             except: pass
