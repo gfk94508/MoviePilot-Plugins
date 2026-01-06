@@ -51,7 +51,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.2.4"
+    plugin_version = "1.2.5"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -90,7 +90,7 @@ class StrmDeLocal(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         self._log("--------------------")
-        self._log("插件初始化中 (V1.1.9)...")
+        self._log(f"插件初始化中 (V{self.plugin_version})...")
         if not config: config = self.get_config() or {}
         from app.chain.media import MediaChain
         self._mediachain = MediaChain()
