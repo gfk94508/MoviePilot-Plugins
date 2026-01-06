@@ -52,7 +52,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.1"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -265,6 +265,11 @@ class StrmDeLocal(_PluginBase):
         if not path: return ""
         return f"https://{settings.TMDB_IMAGE_DOMAIN}/t/p/{prefix}{path}"
 
+    @staticmethod
+    def is_media_file(filename: str) -> bool:
+        ext = os.path.splitext(filename)[1].lower()
+        return ext in MEDIA_EXTENSIONS
+
     def get_page(self) -> List[dict]:
         historys = self.get_data('history')
         if not historys:
@@ -344,8 +349,10 @@ class StrmDeLocal(_PluginBase):
                 })
             
             # V1.2.3: 详细文件列表 (对齐修正)
+            # V1.3.1: 仅展示媒体文件，避免 NFO 刷屏
             if files:
                 for f in files:
+                     if not self.is_media_file(f): continue
                      sub_contents.append({
                          'component': 'VCardText', 
                          'props': {
@@ -409,13 +416,14 @@ class StrmDeLocal(_PluginBase):
         return cards
 
     def _get_file_stats(self, files: List[str]) -> str:
-        v, d, m, p, o = 0, 0, 0, 0, 0
+        v, d, m, p, o, t = 0, 0, 0, 0, 0, 0
         for f in files:
             flow = f.lower()
-            if flow.endswith(('.mp4', '.mkv', '.ts', '.iso', '.avi', '.mov')): v+=1
-            elif flow.endswith(('.nfo', '.xml')): m+=1
-            elif flow.endswith(('.jpg', '.png', '.bif')): p+=1
-            elif '.' not in f or '/' in f or '\\\\' in f: d+=1 # 简单判定目录
+            if flow.endswith(tuple(MEDIA_EXTENSIONS)): v+=1
+            elif flow.endswith(('.nfo', '.xml', '.txt')): m+=1
+            elif flow.endswith(('.jpg', '.png', '.jpeg', '.bmp', '.bif')): p+=1
+            elif flow.endswith('.torrent'): t+=1
+            elif '.' not in f or '/' in f or '\\\\' in f: d+=1 # 判定可能是目录 (简单逻辑)
             else: o+=1
         
         parts = []
@@ -423,6 +431,7 @@ class StrmDeLocal(_PluginBase):
         if d: parts.append(f"📁{d}")
         if m: parts.append(f"📄{m}")
         if p: parts.append(f"🖼️{p}")
+        if t: parts.append(f"⬇️{t}")
         if o: parts.append(f"📦{o}")
         return " ".join(parts)
 
@@ -558,35 +567,47 @@ class StrmDeLocal(_PluginBase):
         except Exception as e:
             self._log(f"-> 目录回收失败: {e}", "warning", title=title)
 
-    def _del_meta_for_file(self, media_path: Path):
-        if not self._clean_metadata: return
+    def _del_meta_for_file(self, media_path: Path, title: str = None) -> List[str]:
+        if not self._clean_metadata: return []
         parent = media_path.parent
-        if not parent.exists(): return
+        if not parent.exists(): return []
         
         stem = media_path.stem
-        deleted_count = 0
+        deleted_files = []
         
+        # 1. 精确后缀匹配
         for ext in META_EXTENSIONS:
             f = parent / f"{stem}{ext}"
             try: 
-                if f.exists(): f.unlink(); deleted_count += 1
-            except: pass
+                if f.exists(): 
+                    f.unlink()
+                    deleted_files.append(str(f))
+            except Exception as e:
+                self._log(f"-> 刮削删除失败: {f.name} ({e})", "warning", title=title)
             
+        # 2. 前缀模糊匹配 (排除自身)
         try:
             for f in parent.glob(f"{stem}*"):
                 if f == media_path: continue
                 if f.suffix.lower() not in META_EXTENSIONS: continue
+                
                 name = f.stem
-                if name == stem: 
-                    pass
+                should_del = False
+                if name == stem: should_del = True
                 elif name.startswith(f"{stem} ") or name.startswith(f"{stem}.") or \
                      name.startswith(f"{stem}-") or name.startswith(f"{stem}_"):
-                    try: f.unlink(); deleted_count += 1
-                    except: pass
-        except: pass
+                    should_del = True
+                
+                if should_del:
+                    try: 
+                        f.unlink()
+                        deleted_files.append(str(f))
+                    except Exception as e:
+                        self._log(f"-> 刮削删除失败: {f.name} ({e})", "warning", title=title)
+        except Exception as e:
+            self._log(f"-> 遍历刮削失败: {e}", "warning", title=title)
         
-        if deleted_count > 0:
-            self._log(f"-> 已清理刮削文件: {deleted_count} 个", title=self._current_title if hasattr(self, '_current_title') else None)
+        return list(set(deleted_files))
 
     def _handle_single_file(self, strm_path: Path, stats: dict = None):
         # 1. 基础信息提取
@@ -738,20 +759,26 @@ class StrmDeLocal(_PluginBase):
             try: h_record = self._transferhistory.get_by_dest(str(file_path))
             except: pass
 
-            # 清理刮削文件
-            if self._clean_metadata:
-                self._current_title = title  # 传递title给_del_meta_for_file
-                try: self._del_meta_for_file(file_path)
-                except: pass
-
-            # 清理种子
+            # 1. 联动删除种子 (记录为虚拟文件)
             if self._delete_torrent:
                 t_hash = self._get_torrent_hash(file_path, h_record)
                 if t_hash:
-                    try: 
+                    try:
                         eventmanager.send_event(EventType.DownloadFileDeleted, {"hash": t_hash})
                         self._log(f"-> 已触发删种: {t_hash[:8]}...", title=title)
-                    except: pass
+                        # 添加虚拟文件记录以便统计
+                        processed_files.add(f"task_{t_hash[:8]}.torrent")
+                    except Exception as e:
+                        self._log(f"-> 删种请求失败: {e}", "warning", title=title)
+
+            # 2. 清理刮削文件
+            if self._clean_metadata:
+                meta_deleted = self._del_meta_for_file(file_path, title=title)
+                if meta_deleted:
+                    for mf in meta_deleted:
+                        self._log(f"-> 已清理刮削文件: {Path(mf).name}", title=title)
+                        processed_files.add(str(mf))
+                    if stats: stats["deleted"] += len(meta_deleted)
 
             # 清理转移记录
             if self._remove_record and h_record:
