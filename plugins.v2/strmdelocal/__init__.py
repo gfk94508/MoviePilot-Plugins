@@ -52,7 +52,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -435,6 +435,23 @@ class StrmDeLocal(_PluginBase):
         if o: parts.append(f"📦{o}")
         return " ".join(parts)
 
+    def _get_log_stats_str(self, files: List[str]) -> str:
+        """生成日志专用的统计字符串 (例如: 其中媒体文件1个,刮削文件5个)"""
+        v, m, o = 0, 0, 0
+        for f in files:
+            flow = f.lower()
+            if flow.endswith(tuple(MEDIA_EXTENSIONS)): v+=1
+            elif flow.endswith(tuple(META_EXTENSIONS)): m+=1
+            elif flow.endswith('.torrent'): pass # 种子作为虚拟文件不计入普通计数，或计入其他？这里暂且忽略或归类
+            else: o+=1
+        
+        parts = []
+        if v: parts.append(f"媒体文件{v}个")
+        if m: parts.append(f"刮削文件{m}个")
+        if o: parts.append(f"其他文件{o}个")
+        
+        return "其中" + ",".join(parts) if parts else ""
+
     def _process_queue_loop(self):
         stats = {"scanned": 0, "matched": 0, "deleted": 0, "failed": 0, "deleted_files": []}
         has_data = False
@@ -515,7 +532,7 @@ class StrmDeLocal(_PluginBase):
             return False, [], msg
         
         if not transfer_records:
-            self._log(f"-> 查询结果: 未找到匹配的转移记录", title=title)
+            self._log(f"-> 查询转移记录: 未找到匹配的转移记录", title=title)
             return False, [], msg
         
         self._log(f"-> 查询结果: 找到 {len(transfer_records)} 条转移记录", title=title)
@@ -529,9 +546,9 @@ class StrmDeLocal(_PluginBase):
                 if not self._is_excluded(p): matched_files.append(p)
         
         if matched_files:
-            self._log(f"-> 本地文件匹配: {len(matched_files)} 个文件在配置的本地路径下", title=title)
+            self._log(f"-> 转移记录精确匹配成功: {len(matched_files)} 个文件", title=title)
         else:
-            self._log(f"-> 本地文件匹配: 无 (转移记录目标路径不在配置的本地路径范围内)", title=title)
+            self._log(f"-> 查询转移记录: 找到记录但文件不在监控范围内", title=title)
         
         return bool(matched_files), matched_files, msg
 
@@ -583,7 +600,7 @@ class StrmDeLocal(_PluginBase):
                     f.unlink()
                     deleted_files.append(str(f))
             except Exception as e:
-                self._log(f"-> 刮削删除失败: {f.name} ({e})", "warning", title=title)
+                self._log(f"-> 刮削删除失败: {f} ({e})", "warning", title=title)
             
         # 2. 前缀模糊匹配 (排除自身)
         try:
@@ -603,7 +620,7 @@ class StrmDeLocal(_PluginBase):
                         f.unlink()
                         deleted_files.append(str(f))
                     except Exception as e:
-                        self._log(f"-> 刮削删除失败: {f.name} ({e})", "warning", title=title)
+                        self._log(f"-> 刮削删除失败: {f} ({e})", "warning", title=title)
         except Exception as e:
             self._log(f"-> 遍历刮削失败: {e}", "warning", title=title)
         
@@ -649,7 +666,7 @@ class StrmDeLocal(_PluginBase):
                     tmdb_logger.setLevel(original_level)
 
                 if media_data:
-                    self._log(f"-> 媒体识别: {media_data.title} ({media_data.year})", title=title)
+                    self._log(f"-> 获取到媒体识别结果: {media_data.title} ({media_data.year})", title=title)
                 if media_data:
                     media_info = {
                         "tmdbid": tmdb_id,
@@ -684,7 +701,7 @@ class StrmDeLocal(_PluginBase):
             self._log(f"-> 路径映射失败: 未找到匹配的映射规则，已跳过", "warning", title=title)
             return
         
-        self._log(f"-> 路径映射: {source_root} => {local_base}", title=title)
+        self._log(f"-> 符合路径映射: {source_root} => {local_base}", title=title)
 
         rel_path = path_str[len(source_root):].strip("/")
         parts = rel_path.split("/")
@@ -724,7 +741,11 @@ class StrmDeLocal(_PluginBase):
                 if processed_files:
                     history_match_info['deep_search'] = '成功'
                     action = "清理完成" if not self._notify_only else "发现待清理"
-                    self._log(f"{action}，深度查找处理 {len(processed_files)} 个文件", title=title)
+                    
+                    # 生成详细统计字符串
+                    stats_str = self._get_log_stats_str(list(processed_files))
+                    self._log(f"{action}，深度查找处理 {len(processed_files)} 个文件，{stats_str}", title=title)
+                    
                     self._save_history(h_msg or title, action, 
                                      f"涉及 {len(processed_files)} 个文件 (深度查找)", files_list=list(processed_files),
                                      strm_path=str(strm_path), match_info=history_match_info, media_info=media_info)
@@ -776,11 +797,11 @@ class StrmDeLocal(_PluginBase):
                 meta_deleted = self._del_meta_for_file(file_path, title=title)
                 if meta_deleted:
                     for mf in meta_deleted:
-                        self._log(f"-> 已清理刮削文件: {Path(mf).name}", title=title)
+                        self._log(f"-> 已清理刮削文件: {mf}", title=title)
                         processed_files.add(str(mf))
                     if stats: stats["deleted"] += len(meta_deleted)
 
-            # 清理转移记录
+            # 3. 清理转移记录
             if self._remove_record and h_record:
                 try: 
                     self._transferhistory.delete(h_record.id)
@@ -791,7 +812,7 @@ class StrmDeLocal(_PluginBase):
             if file_exists:
                 try:
                     file_path.unlink()
-                    self._log(f"-> 已删除文件: {file_path}", title=title)
+                    self._log(f"-> 已删除媒体文件: {file_path}", title=title)
                     if stats: 
                         stats["deleted"] += 1
                         stats["deleted_files"].append(str(file_path))
@@ -827,7 +848,7 @@ class StrmDeLocal(_PluginBase):
                     for d in sub_dirs:
                         if n in d.name.lower() and y in d.name:
                             current = d; found = True
-                            self._log(f"-> 智能重定向成功: {d.name}", title=title)
+                            self._log(f"-> 智能重定向成功: {d}", title=title)
                             break
                 if not found and re.search(r'[sS]eason\s*\d+', part, re.I):
                     num = int(re.search(r'\d+', part).group())
