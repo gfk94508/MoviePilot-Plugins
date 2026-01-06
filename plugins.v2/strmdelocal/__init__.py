@@ -51,7 +51,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.1.9"
+    plugin_version = "1.2.0"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -344,43 +344,56 @@ class StrmDeLocal(_PluginBase):
                 ]
             })
 
-            # 组合卡片
-            card_content = [
-                {
+            # 主卡片内容 (左右布局)
+            main_row = {
+                'component': 'div',
+                'props': {'class': 'd-flex flex-row'},
+                'content': [
+                    # 左侧海报/占位
+                    {
+                        'component': 'div',
+                        'content': [{
+                            'component': 'VImg',
+                            'props': {
+                                'src': image,
+                                'width': 80,
+                                'height': 120,
+                                'aspect-ratio': '2/3',
+                                'cover': True,
+                                'class': 'rounded'
+                            }
+                        }] if image else [{
+                            'component': 'div',
+                            'props': {
+                                'class': 'd-flex align-center justify-center bg-grey-lighten-3 rounded',
+                                'style': 'width: 80px; height: 120px;'
+                            },
+                            'text': '无海报'
+                        }]
+                    },
+                    # 右侧信息容器
+                    {
+                        'component': 'div',
+                        'props': {'class': 'flex-grow-1 ml-2'},
+                        'content': sub_contents
+                    }
+                ]
+            }
+            
+            card_content = [main_row]
+            
+            # V1.2.0: 底部显示详细文件列表
+            if files:
+                file_lines = []
+                for f in files:
+                     file_lines.append({'component': 'div', 'class': 'text-caption text-grey-darken-1', 'style': 'word-break: break-all;', 'text': f"• {f}"})
+                
+                card_content.append({'component': 'VDivider', 'class': 'my-2'})
+                card_content.append({
                     'component': 'div',
-                    'props': {'class': 'd-flex flex-row'},
-                    'content': [
-                        # 左侧海报/占位
-                        {
-                            'component': 'div',
-                            'content': [{
-                                'component': 'VImg',
-                                'props': {
-                                    'src': image,
-                                    'width': 80,
-                                    'height': 120,
-                                    'aspect-ratio': '2/3',
-                                    'cover': True,
-                                    'class': 'rounded'
-                                }
-                            }] if image else [{
-                                'component': 'div',
-                                'props': {
-                                    'class': 'd-flex align-center justify-center bg-grey-lighten-3 rounded',
-                                    'style': 'width: 80px; height: 120px;'
-                                },
-                                'text': '无海报'
-                            }]
-                        },
-                        # 右侧信息容器
-                        {
-                            'component': 'div',
-                            'props': {'class': 'flex-grow-1 ml-2'},
-                            'content': sub_contents
-                        }
-                    ]
-                }
-            ]
+                    'class': 'bg-grey-lighten-4 rounded pa-2',
+                    'content': file_lines
+                })
             
             cards.append({'component': 'VCard', 'class': 'mb-3 pa-2', 'content': card_content})
             
@@ -436,19 +449,23 @@ class StrmDeLocal(_PluginBase):
                 self._log(f"队列处理异常: {traceback.format_exc()}", "error")
                 has_data = False
 
-    def _find_by_transfer_history(self, strm_path: Path, local_base: Path, title: str = None) -> Tuple[bool, List[Path], Optional[str]]:
+    def _find_by_transfer_history(self, strm_path: Path, local_base: Path, title: str = None, tmdb_id_in: int = None) -> Tuple[bool, List[Path], Optional[str]]:
         path_str = str(strm_path).replace("\\\\", "/")
         
-        # 提取 TMDB ID
-        tmdb_id = None
-        tmdb_match = re.search(r'\{(?:tmdb|tmdbid)[=-]?(\d+)\}', path_str, re.I)
-        if not tmdb_match:
-            tmdb_match = re.search(r'tmdb[=-](\d+)', path_str, re.I)
-        if not tmdb_match:
-            tmdb_match = re.search(r'\[tmdbid[=-](\d+)\]', path_str, re.I)
-        
-        if tmdb_match:
-            tmdb_id = int(tmdb_match.group(1))
+        # 优先使用传入的 ID
+        tmdb_id = tmdb_id_in
+        logged_extraction = True if tmdb_id else False
+
+        if not tmdb_id:
+            # 提取 TMDB ID
+            tmdb_match = re.search(r'\{(?:tmdb|tmdbid)[=-]?(\d+)\}', path_str, re.I)
+            if not tmdb_match:
+                tmdb_match = re.search(r'tmdb[=-](\d+)', path_str, re.I)
+            if not tmdb_match:
+                tmdb_match = re.search(r'\[tmdbid[=-](\d+)\]', path_str, re.I)
+            
+            if tmdb_match:
+                tmdb_id = int(tmdb_match.group(1))
         
         # 提取季集信息 (用于查询，但不在日志中显示)
         season_num, episode_num = None, None
@@ -461,8 +478,9 @@ class StrmDeLocal(_PluginBase):
             self._log(f"-> 提取失败: 未能识别 TMDB ID", title=title)
             return False, [], None
         
-        # 日志只显示 TMDB ID，不显示季集
-        self._log(f"-> 提取成功: TMDB:{tmdb_id}", title=title)
+        # 如果是函数内部提取的，记录日志
+        if not logged_extraction:
+            self._log(f"-> 提取成功: TMDB:{tmdb_id}", title=title)
         
         # 用于返回的消息
         msg = f"TMDB:{tmdb_id}"
@@ -573,7 +591,9 @@ class StrmDeLocal(_PluginBase):
         tmdb_match = re.search(r'\{(?:tmdb|tmdbid)[=-]?(\d+)\}', path_str, re.I)
         if not tmdb_match: tmdb_match = re.search(r'tmdb[=-](\d+)', path_str, re.I)
         if not tmdb_match: tmdb_match = re.search(r'\[tmdbid[=-](\d+)\]', path_str, re.I)
-        if tmdb_match: tmdb_id = int(tmdb_match.group(1))
+        if tmdb_match: 
+            tmdb_id = int(tmdb_match.group(1))
+            self._log(f"-> 提取成功: TMDB:{tmdb_id}", title=title)
 
         season_num, episode_num = None, None
         se_match = re.search(r'[sS](\d+)[eE](\d+)', title)
@@ -629,7 +649,7 @@ class StrmDeLocal(_PluginBase):
         processed_files = set()
         
         # 6. 通过转移记录查找
-        found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base, title=title)
+        found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base, title=title, tmdb_id_in=tmdb_id)
         
         history_match_info = {'records': 0, 'deep_search': '未启用'}
 
