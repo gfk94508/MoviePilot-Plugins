@@ -53,7 +53,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.3"
+    plugin_version = "1.3.4"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -561,9 +561,20 @@ class StrmDeLocal(_PluginBase):
         
         return bool(matched_files), matched_files, msg
 
-    def _recursive_check_and_cleanup(self, dir_path: Path, stats: dict = None, title: str = None):
+    def _recursive_check_and_cleanup(self, dir_path: Path, stats: dict = None, title: str = None, root_path: Path = None):
         if not dir_path.exists() or not dir_path.is_dir():
             return
+        
+        # 安全检查: 防止向上递归删除到了根目录或其父目录
+        if root_path:
+            try:
+                # 如果当前目录是根目录，停止
+                if dir_path == root_path: return
+                # 如果当前目录是根目录的上级目录 (例如 root=/a/b, dir=/a)，停止
+                # 兼容性写法 (pathlib.is_relative_to 需要 Py3.9+)
+                if str(root_path).replace("\\\\", "/").startswith(str(dir_path).replace("\\\\", "/")):
+                     return
+            except: pass
         
         has_valid_content = False
         try:
@@ -593,7 +604,7 @@ class StrmDeLocal(_PluginBase):
             self._log(f"-> 已回收空目录: {dir_path}", title=title)
             if stats: stats["deleted"] += 1
             if dir_path.parent.exists():
-                self._recursive_check_and_cleanup(dir_path.parent, stats, title=title)
+                self._recursive_check_and_cleanup(dir_path.parent, stats, title=title, root_path=root_path)
         except Exception as e:
             self._log(f"-> 目录回收失败: {e}", "warning", title=title)
 
@@ -732,7 +743,7 @@ class StrmDeLocal(_PluginBase):
             
             for file_path in history_files:
                 self._perform_cleanup(file_path, stats, processed_files, title=title)
-                self._recursive_check_and_cleanup(file_path.parent, stats, title=title)
+                self._recursive_check_and_cleanup(file_path.parent, stats, title=title, root_path=local_base)
             
             action = "清理完成" if not self._notify_only else "发现待清理"
             self._log(f"{action}，处理 {len(history_files)} 个文件", title=title)
@@ -885,7 +896,7 @@ class StrmDeLocal(_PluginBase):
                         if str(f) not in processed_files and not self._is_excluded(f):
                             if stats: stats["matched"] += 1
                             self._perform_cleanup(f, stats, processed_files, title=title)
-                self._recursive_check_and_cleanup(current, stats, title=title)
+                self._recursive_check_and_cleanup(current, stats, title=title, root_path=local_base)
         else:
             if current != local_base and str(current) not in processed_files:
                 if stats: stats["matched"] += 1
