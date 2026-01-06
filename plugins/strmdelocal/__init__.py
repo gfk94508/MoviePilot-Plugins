@@ -16,6 +16,7 @@ import threading
 from queue import Queue, Empty
 import re
 import json
+import logging
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -51,7 +52,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.2.5"
+    plugin_version = "1.2.6"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -608,7 +609,19 @@ class StrmDeLocal(_PluginBase):
             try:
                 from app.schemas.types import MediaType
                 mtype = MediaType.TV if season_num else MediaType.MOVIE
-                media_data = self._mediachain.recognize_media(tmdbid=tmdb_id, mtype=mtype)
+                
+                # 抑制 themoviedb 的原生日志
+                tmdb_logger = logging.getLogger("themoviedb")
+                original_level = tmdb_logger.level
+                tmdb_logger.setLevel(logging.WARNING)
+                
+                try:
+                    media_data = self._mediachain.recognize_media(tmdbid=tmdb_id, mtype=mtype)
+                finally:
+                    tmdb_logger.setLevel(original_level)
+
+                if media_data:
+                    self._log(f"-> 媒体识别: {media_data.title} ({media_data.year})", title=title)
                 if media_data:
                     media_info = {
                         "tmdbid": tmdb_id,
